@@ -9,12 +9,12 @@ from typing import List, Dict, Any
 from dotenv import load_dotenv
 
 from read_url import read_url_and_extract_chunks
-from nltk_setup import download_nltk_data
+from nltk_setup import download_nltk_data # <-- Verify this import exists
 
 # --- Initialization & Caching Setup ---
 load_dotenv()
 
-download_nltk_data()
+download_nltk_data() # <-- Verify this function call exists
 
 # IMPROVEMENT: Configure logging for robust monitoring
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
