@@ -9,6 +9,8 @@ from typing import List, Dict, Any
 from dotenv import load_dotenv
 import nltk
 import ssl
+from fastapi import FastAPI, Depends, HTTPException # <-- Make sure Depends is imported  #!
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials # <-- Import these   #!
 nltk.download('punkt_tab')
 nltk.download('punkt')
 nltk.download('stopwords')
@@ -20,6 +22,8 @@ from nltk_setup import download_nltk_data # <-- Verify this import exists
 load_dotenv()
 
 download_nltk_data() # <-- Verify this function call exists
+
+auth_scheme = HTTPBearer()   #!
 
 # IMPROVEMENT: Configure logging for robust monitoring
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -93,7 +97,7 @@ def get_or_create_document_index(doc_url: str):
 
 # --- API Endpoint ---
 @app.post("/hackrx/run")
-async def run_query_retrieval(request: HackRxRequest):
+async def run_query_retrieval(request: HackRxRequest,token: HTTPAuthorizationCredentials = Depends(auth_scheme)):    #!
     structured_answers = []
     try:
         doc_data = get_or_create_document_index(str(request.documents))
