@@ -1,0 +1,24 @@
+# Core document processing libraries
+requests
+beautifulsoup4
+html2text
+python-docx
+nltk
+PyMuPDF>=1.21.0
+lxml
+
+# Vector Search
+faiss-cpu
+numpy
+
+# FastAPI server
+uvicorn
+fastapi
+
+# LLM APIs
+openai>=1.0.0
+google-generativeai
+cohere
+
+# Environment variable management
+python-dotenv

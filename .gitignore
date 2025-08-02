@@ -1,0 +1,11 @@
+# Environment files
+.env
+teat_api.py
+
+# Python virtual environment
+env/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
