@@ -7,6 +7,11 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, HttpUrl
 from typing import List, Dict, Any
 from dotenv import load_dotenv
+import nltk
+import ssl
+nltk.download('punkt_tab')
+nltk.download('punkt')
+nltk.download('stopwords')
 
 from read_url import read_url_and_extract_chunks
 from nltk_setup import download_nltk_data # <-- Verify this import exists
