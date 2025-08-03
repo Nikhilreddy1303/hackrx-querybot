@@ -986,7 +986,7 @@ async def run_query_retrieval(request: HackRxRequest, token: HTTPAuthorizationCr
     answers = []
     for i, res in enumerate(results):
         if isinstance(res, Exception):
-            answers.append(Answer(question=request.questions[i], answer="Error occurred.", context=[]))
+            answers.append(Answer(question=request.questions[i], answer="Error occurred.")) #answers.append(Answer(question=request.questions[i], answer="Error occurred.", context=[]))
         else:
             answers.append(res)
 
