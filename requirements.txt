@@ -22,3 +22,8 @@ cohere
 
 # Environment variable management
 python-dotenv
+
+# Add this for asynchronous HTTP requests
+# aiohttp
+
+
