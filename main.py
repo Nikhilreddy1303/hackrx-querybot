@@ -986,11 +986,16 @@ async def run_query_retrieval(request: HackRxRequest, token: HTTPAuthorizationCr
     answers = []
     for i, res in enumerate(results):
         if isinstance(res, Exception):
-            answers.append(Answer(question=request.questions[i], answer="Error occurred.")) #answers.append(Answer(question=request.questions[i], answer="Error occurred.", context=[]))
+            answers.append(Answer(question=request.questions[i], answer="Error occurred.", context=[])) #answers.append(Answer(question=request.questions[i], answer="Error occurred.", context=[]))
         else:
             answers.append(res)
 
-    return HackRxResponse(answers=answers)
+    if SUBMISSION_MODE:
+        # If submission mode is true, return only the answer strings
+        return {"answers": [item.answer for item in answers]}
+    else:
+        # Otherwise, return the full HackRxResponse object with questions, answers, and contexts
+        return HackRxResponse(answers=answers)
 
 @app.get("/health")
 async def health():
