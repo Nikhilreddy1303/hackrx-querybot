@@ -777,9 +777,9 @@ from nltk_setup import download_nltk_data
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    download_nltk_data()
-    nltk.download('punkt', quiet=True)
-    nltk.download('stopwords', quiet=True)
+    # download_nltk_data()
+    # nltk.download('punkt', quiet=True)
+    # nltk.download('stopwords', quiet=True)
     yield
 
 load_dotenv()
@@ -800,7 +800,7 @@ CACHE: Dict[str, Any] = {}
 MAX_CACHE_SIZE = 10
 RATE_LIMIT_DELAY = 1.2
 
-SUBMISSION_MODE = os.getenv("SUBMISSION_MODE", "false").lower() == "true"
+SUBMISSION_MODE = os.getenv("SUBMISSION_MODE", "true").lower() == "true"
 if SUBMISSION_MODE:
     logging.warning("Application is running in SUBMISSION MODE.")
 
