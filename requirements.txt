@@ -10,6 +10,7 @@ lxml
 # Vector Search
 faiss-cpu
 numpy
+rank_bm25
 
 # FastAPI server
 uvicorn
