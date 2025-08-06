@@ -2,6 +2,7 @@ import os
 import faiss
 import numpy as np
 import logging
+import logging.handlers
 import asyncio
 import google.generativeai as genai
 from fastapi import FastAPI, HTTPException, Depends
@@ -12,6 +13,7 @@ from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 import json
 import hashlib
+from datetime import datetime
 from rank_bm25 import BM25Okapi
 from cachetools import LRUCache
 from google.generativeai.types import GenerationConfig
@@ -25,34 +27,20 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 PRECOMPUTED_DIR = "precomputed_indices"
-CACHE: LRUCache[str, Any] = LRUCache(maxsize=20) # Increased cache size for more documents
+CACHE: LRUCache[str, Any] = LRUCache(maxsize=20)
 SUBMISSION_MODE = os.getenv("SUBMISSION_MODE", "true").lower() == "true"
 JSON_GENERATION_CONFIG = GenerationConfig(response_mime_type="application/json")
 EMBEDDING_BATCH_SIZE = 100
 RERANKER_TIMEOUT = 15.0
 FINAL_ANSWER_TIMEOUT = 30.0
 
-# --- ADAPTIVE RERANKER PROMPTS ---
-RERANKER_PROMPTS = {
-    "Financial": 'You are a meticulous financial analyst. Your task is to identify the top 5 most relevant document chunks to answer the user\'s question. Prioritize chunks that contain specific numbers, monetary values, limits, percentages, or explicit conditions.',
-    "Legal": 'You are a sharp-eyed paralegal. Your task is to identify the top 5 most relevant document chunks to answer the user\'s question. Prioritize chunks that reference specific clauses, articles, legal obligations, or defined terms.',
-    "Scientific": 'You are a detail-oriented researcher. Your task is to identify the top 5 most relevant document chunks to answer the user\'s question. Prioritize chunks that contain definitions, laws, formulas, experimental results, or evidence.',
-    "Default": 'You are a relevance expert. Your task is to identify the top 5 most relevant document chunks to answer the user\'s question. Prioritize chunks with the most specific and directly applicable information.'
-}
-
-async def get_document_topic(text_sample: str) -> str:
-    """Classify the document topic to select the best reranker prompt."""
-    if not text_sample:
-        return "Default"
-    try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = f'Classify the topic of the following text as "Financial", "Legal", "Scientific", or "Default". Respond with only one word.\n\nText: "{text_sample}"'
-        response = await asyncio.wait_for(model.generate_content_async(prompt), timeout=10.0)
-        topic = response.text.strip()
-        return topic if topic in RERANKER_PROMPTS else "Default"
-    except Exception as e:
-        logging.warning(f"Document classification failed: {e}. Falling back to default.")
-        return "Default"
+# --- SETUP DEDICATED Q&A LOGGER ---
+qa_logger = logging.getLogger('qa_logger')
+qa_logger.setLevel(logging.INFO)
+handler = logging.handlers.RotatingFileHandler('qa_log.jsonl', maxBytes=10*1024*1024, backupCount=3)
+formatter = logging.Formatter('%(message)s')
+handler.setFormatter(formatter)
+qa_logger.addHandler(handler)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -60,6 +48,7 @@ async def lifespan(app: FastAPI):
     logging.info("Starting to pre-load documents into cache...")
     if os.path.exists(PRECOMPUTED_DIR):
         urls_to_preload = [
+            # Paste the full list of 16 URLs here
             "https://hackrx.blob.core.windows.net/assets/Arogya%20Sanjeevani%20Policy%20-%20CIN%20-%20U10200WB1906GOI001713%201.pdf?sv=2023-01-03&st=2025-07-21T08%3A29%3A02Z&se=2025-09-22T08%3A29%3A00Z&sr=b&sp=r&sig=nzrz1K9Iurt%2BBXom%2FB%2BMPTFMFP3PRnIvEsipAX10Ig4%3D",
             "https://hackrx.blob.core.windows.net/assets/Happy%20Family%20Floater%20-%202024%20OICHLIP25046V062425%201.pdf?sv=2023-01-03&spr=https&st=2025-07-31T17%3A24%3A30Z&se=2026-08-01T17%3A24%3A00Z&sr=b&sp=r&sig=VNMTTQUjdXGYb2F4Di4P0zNvmM2rTBoEHr%2BnkUXIqpQ%3D",
             "https://hackrx.blob.core.windows.net/assets/UNI%20GROUP%20HEALTH%20INSURANCE%20POLICY%20-%20UIIHLGP26043V022526%201.pdf?sv=2023-01-03&spr=https&st=2025-07-31T17%3A06%3A03Z&se=2026-08-01T17%3A06%3A00Z&sr=b&sp=r&sig=wLlooaThgRx91i2z4WaeggT0qnuUUEzIUKj42GsvMfg%3D",
@@ -73,6 +62,8 @@ async def lifespan(app: FastAPI):
             "https://hackrx.blob.core.windows.net/assets/Test%20/Salary%20data.xlsx?sv=2023-01-03&spr=https&st=2025-08-04T18%3A46%3A54Z&se=2026-08-05T18%3A46%3A00Z&sr=b&sp=r&sig=sSoLGNgznoeLpZv%2FEe%2FEI1erhD0OQVoNJFDPtqfSdJQ%3D",
             "https://hackrx.blob.core.windows.net/assets/Test%20/Pincode%20data.xlsx?sv=2023-01-03&spr=https&st=2025-08-04T18%3A50%3A43Z&se=2026-08-05T18%3A50%3A00Z&sr=b&sp=r&sig=xf95kP3RtMtkirtUMFZn%2FFNai6sWHarZsTcvx8ka9mI%3D",
             "https://hackrx.blob.core.windows.net/assets/Test%20/image.png?sv=2023-01-03&spr=https&st=2025-08-04T19%3A21%3A45Z&se=2026-08-05T19%3A21%3A00Z&sr=b&sp=r&sig=lAn5WYGN%2BUAH7mBtlwGG4REw5EwYfsBtPrPuB0b18M4%3D",
+            "https://hackrx.blob.core.windows.net/assets/hackrx_pdf.zip?sv=2023-01-03&spr=https&st=2025-08-04T09%3A25%3A45Z&se=2027-08-05T09%3A25%3A00Z&sr=b&sp=r&sig=rDL2ZcGX6XoDga5%2FTwMGBO9MgLOhZS8PUjvtga2cfVk%3D",
+            "https://ash-speed.hetzner.com/10GB.bin",
             "https://hackrx.blob.core.windows.net/assets/Test%20/Fact%20Check.docx?sv=2023-01-03&spr=https&st=2025-08-04T20%3A27%3A22Z&se=2028-08-05T20%3A27%3A00Z&sr=b&sp=r&sig=XB1%2FNzJ57eg52j4xcZPGMlFrp3HYErCW1t7k1fMyiIc%3D"
         ]
         
@@ -91,11 +82,9 @@ async def lifespan(app: FastAPI):
                     tokenized_corpus = [c['text'].lower().split(" ") for c in chunks_with_meta]
                     bm25 = BM25Okapi(tokenized_corpus)
                     
-                    sample_text = " ".join([c['text'] for c in chunks_with_meta[:10]])[:1500]
-                    doc_topic = await get_document_topic(sample_text)
-
-                    CACHE[url_hash] = {"faiss_index": index, "bm25_index": bm25, "chunks_with_meta": chunks_with_meta, "topic": doc_topic}
-                    logging.info(f"Successfully pre-loaded a document into cache (Hash: {url_hash[:8]}..., Topic: {doc_topic}).")
+                    # No longer classifying topic on startup for stability
+                    CACHE[url_hash] = {"faiss_index": index, "bm25_index": bm25, "chunks_with_meta": chunks_with_meta}
+                    logging.info(f"Successfully pre-loaded a document into cache (Hash: {url_hash[:8]}...).")
                 except Exception as e:
                     logging.error(f"Failed to pre-load cache for {doc_url}: {e}")
     yield
@@ -137,9 +126,7 @@ async def get_or_create_document_index(doc_url: str) -> Dict[str, Any]:
         try:
             result = await genai.embed_content_async(model=embed_model, content=batch, task_type="RETRIEVAL_DOCUMENT")
             all_embeddings.extend(result['embedding'])
-            logging.info(f"Embedded batch {i//EMBEDDING_BATCH_SIZE + 1}...")
         except Exception as e:
-            logging.error(f"Embedding failed for a batch: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to embed document content. {e}")
     
     doc_embeddings = np.array(all_embeddings, dtype='float32')
@@ -148,24 +135,17 @@ async def get_or_create_document_index(doc_url: str) -> Dict[str, Any]:
 
     tokenized_corpus = [doc.lower().split(" ") for doc in document_texts]
     bm25_index = BM25Okapi(tokenized_corpus)
-
-    sample_text = " ".join(document_texts[:10])[:1500]
-    doc_topic = await get_document_topic(sample_text)
-    logging.info(f"Document classified as: {doc_topic}")
     
     CACHE[url_hash] = {
         "faiss_index": faiss_index, 
         "bm25_index": bm25_index, 
-        "chunks_with_meta": document_chunks_with_meta,
-        "topic": doc_topic
+        "chunks_with_meta": document_chunks_with_meta
     }
     logging.info(f"Document processed and cached successfully (Hash: {url_hash[:8]}...).")
     return CACHE[url_hash]
 
 async def expand_query(question: str) -> List[str]:
     model = genai.GenerativeModel('gemini-1.5-flash')
-    
-    # New, improved prompt with a guiding example (few-shot prompting)
     prompt = f'''You are a query expansion expert. Your task is to rewrite a question in three different ways to improve search recall against a text document. Focus on using synonyms and alternative phrasing for key terms.
     
     For example, if the question is "What is the waiting period for pre-existing conditions?", good expansions would be:
@@ -176,7 +156,6 @@ async def expand_query(question: str) -> List[str]:
     Respond with only a JSON object like this: {{"queries": ["query1", "query2", "query3"]}}
 
     Original Question: "{question}"'''
-
     try:
         response = await asyncio.wait_for(
             model.generate_content_async(prompt, generation_config=JSON_GENERATION_CONFIG), 
@@ -202,7 +181,7 @@ def reciprocal_rank_fusion(ranked_lists: List[List[int]], k: int = 60) -> List[i
 async def process_single_question(question: str, doc_data: Dict[str, Any], semaphore: asyncio.Semaphore) -> Answer:
     async with semaphore:
         logging.info(f"Processing question: '{question[:30]}...'")
-        faiss_index, bm25_index, chunks_with_meta, topic = doc_data["faiss_index"], doc_data["bm25_index"], doc_data["chunks_with_meta"], doc_data.get("topic", "Default")
+        faiss_index, bm25_index, chunks_with_meta = doc_data["faiss_index"], doc_data["bm25_index"], doc_data["chunks_with_meta"]
         chunks_text = [c['text'] for c in chunks_with_meta]
 
         all_queries = await expand_query(question)
@@ -226,13 +205,13 @@ async def process_single_question(question: str, doc_data: Dict[str, Any], semap
         fused_indices = reciprocal_rank_fusion(faiss_results + bm25_results)
         unique_fused_indices = list(dict.fromkeys(fused_indices))
         
-        retrieved_chunks_for_rerank = [{"index": int(i), "text": chunks_with_meta[i]['text'], "source": chunks_with_meta[i]['source']} for i in unique_fused_indices[:15]]
+        retrieved_chunks_for_rerank = [{"index": int(i), "text": chunks_with_meta[i]['text'], "source": chunks_with_meta[i]['source']} for i in unique_fused_indices[:30]]
 
         if not retrieved_chunks_for_rerank:
             return Answer(question=question, answer="Could not find relevant information.", context=[])
 
         rerank_model = genai.GenerativeModel('gemini-1.5-flash')
-        reranker_base_prompt = RERANKER_PROMPTS[topic]
+        reranker_base_prompt = 'You are a relevance expert. Your task is to identify the top 5 most relevant document chunks to answer the user\'s question. Prioritize chunks with the most specific and directly applicable information.'
         rerank_prompt = f'{reranker_base_prompt}\nRespond with only a JSON object like this: {{"relevant_indices": [index1, index2, ...]}}\n\nUser Question: "{question}"\n\nDocument Chunks:\n{json.dumps(retrieved_chunks_for_rerank)}'
         
         final_context = []
@@ -281,6 +260,20 @@ async def run_query_retrieval(request: HackRxRequest, token: HTTPAuthorizationCr
             else:
                 answers.append(res)
         
+        try:
+            for ans in answers:
+                if isinstance(ans, Answer) and "An error occurred" not in ans.answer:
+                    log_entry = {
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "document_url": doc_url_str,
+                        "question": ans.question,
+                        "answer": ans.answer,
+                        "context": ans.context
+                    }
+                    qa_logger.info(json.dumps(log_entry))
+        except Exception as e:
+            logging.error(f"Failed to write to QA log: {e}")
+
         if SUBMISSION_MODE:
             return {"answers": [item.answer for item in answers]}
         else:
