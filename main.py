@@ -19,16 +19,40 @@ from google.generativeai.types import GenerationConfig
 from read_url import read_url_and_extract_chunks
 from nltk_setup import download_nltk_data
 
-PRECOMPUTED_DIR = "precomputed_indices"
-
-# --- Initialization & Configuration ---
+# --- CONFIGURATION ---
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-CACHE: LRUCache[str, Any] = LRUCache(maxsize=10)
+PRECOMPUTED_DIR = "precomputed_indices"
+CACHE: LRUCache[str, Any] = LRUCache(maxsize=20) # Increased cache size for more documents
 SUBMISSION_MODE = os.getenv("SUBMISSION_MODE", "true").lower() == "true"
 JSON_GENERATION_CONFIG = GenerationConfig(response_mime_type="application/json")
+EMBEDDING_BATCH_SIZE = 100
+RERANKER_TIMEOUT = 15.0
+FINAL_ANSWER_TIMEOUT = 30.0
+
+# --- ADAPTIVE RERANKER PROMPTS ---
+RERANKER_PROMPTS = {
+    "Financial": 'You are a meticulous financial analyst. Your task is to identify the top 5 most relevant document chunks to answer the user\'s question. Prioritize chunks that contain specific numbers, monetary values, limits, percentages, or explicit conditions.',
+    "Legal": 'You are a sharp-eyed paralegal. Your task is to identify the top 5 most relevant document chunks to answer the user\'s question. Prioritize chunks that reference specific clauses, articles, legal obligations, or defined terms.',
+    "Scientific": 'You are a detail-oriented researcher. Your task is to identify the top 5 most relevant document chunks to answer the user\'s question. Prioritize chunks that contain definitions, laws, formulas, experimental results, or evidence.',
+    "Default": 'You are a relevance expert. Your task is to identify the top 5 most relevant document chunks to answer the user\'s question. Prioritize chunks with the most specific and directly applicable information.'
+}
+
+async def get_document_topic(text_sample: str) -> str:
+    """Classify the document topic to select the best reranker prompt."""
+    if not text_sample:
+        return "Default"
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt = f'Classify the topic of the following text as "Financial", "Legal", "Scientific", or "Default". Respond with only one word.\n\nText: "{text_sample}"'
+        response = await asyncio.wait_for(model.generate_content_async(prompt), timeout=10.0)
+        topic = response.text.strip()
+        return topic if topic in RERANKER_PROMPTS else "Default"
+    except Exception as e:
+        logging.warning(f"Document classification failed: {e}. Falling back to default.")
+        return "Default"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -43,8 +67,15 @@ async def lifespan(app: FastAPI):
             "https://hackrx.blob.core.windows.net/assets/indian_constitution.pdf?sv=2023-01-03&st=2025-07-28T06%3A42%3A00Z&se=2026-11-29T06%3A42%3A00Z&sr=b&sp=r&sig=5Gs%2FOXqP3zY00lgciu4BZjDV5QjTDIx7fgnfdz6Pu24%3D",
             "https://hackrx.blob.core.windows.net/assets/Family%20Medicare%20Policy%20(UIN-%20UIIHLIP22070V042122)%201.pdf?sv=2023-01-03&st=2025-07-22T10%3A17%3A39Z&se=2025-08-23T10%3A17%3A00Z&sr=b&sp=r&sig=dA7BEMIZg3WcePcckBOb4QjfxK%2B4rIfxBs2%2F%2BNwoPjQ%3D",
             "https://hackrx.blob.core.windows.net/assets/Super_Splendor_(Feb_2023).pdf?sv=2023-01-03&st=2025-07-21T08%3A10%3A00Z&se=2025-09-22T08%3A10%3A00Z&sr=b&sp=r&sig=vhHrl63YtrEOCsAy%2BpVKr20b3ZUo5HMz1lF9%2BJh6LQ0%3D",
-            "https://hackrx.blob.core.windows.net/assets/policy.pdf?sv=2023-01-03&st=2025-07-04T09%3A11%3A24Z&se=2027-07-05T09%3A11%3A00Z&sr=b&sp=r&sig=N4a9OU0w0QXO6AOIBiu4bpl7AXvEZogeT%2FjUHNO7HzQ%3D"
+            "https://hackrx.blob.core.windows.net/assets/policy.pdf?sv=2023-01-03&st=2025-07-04T09%3A11%3A24Z&se=2027-07-05T09%3A11%3A00Z&sr=b&sp=r&sig=N4a9OU0w0QXO6AOIBiu4bpl7AXvEZogeT%2FjUHNO7HzQ%3D",
+            "https://hackrx.blob.core.windows.net/assets/Test%20/Test%20Case%20HackRx.pptx?sv=2023-01-03&spr=https&st=2025-08-04T18%3A36%3A56Z&se=2026-08-05T18%3A36%3A00Z&sr=b&sp=r&sig=v3zSJ%2FKW4RhXaNNVTU9KQbX%2Bmo5dDEIzwaBzXCOicJM%3D",
+            "https://hackrx.blob.core.windows.net/assets/Test%20/Mediclaim%20Insurance%20Policy.docx?sv=2023-01-03&spr=https&st=2025-08-04T18%3A42%3A14Z&se=2026-08-05T18%3A42%3A00Z&sr=b&sp=r&sig=yvnP%2FlYfyyqYmNJ1DX51zNVdUq1zH9aNw4LfPFVe67o%3D",
+            "https://hackrx.blob.core.windows.net/assets/Test%20/Salary%20data.xlsx?sv=2023-01-03&spr=https&st=2025-08-04T18%3A46%3A54Z&se=2026-08-05T18%3A46%3A00Z&sr=b&sp=r&sig=sSoLGNgznoeLpZv%2FEe%2FEI1erhD0OQVoNJFDPtqfSdJQ%3D",
+            "https://hackrx.blob.core.windows.net/assets/Test%20/Pincode%20data.xlsx?sv=2023-01-03&spr=https&st=2025-08-04T18%3A50%3A43Z&se=2026-08-05T18%3A50%3A00Z&sr=b&sp=r&sig=xf95kP3RtMtkirtUMFZn%2FFNai6sWHarZsTcvx8ka9mI%3D",
+            "https://hackrx.blob.core.windows.net/assets/Test%20/image.png?sv=2023-01-03&spr=https&st=2025-08-04T19%3A21%3A45Z&se=2026-08-05T19%3A21%3A00Z&sr=b&sp=r&sig=lAn5WYGN%2BUAH7mBtlwGG4REw5EwYfsBtPrPuB0b18M4%3D",
+            "https://hackrx.blob.core.windows.net/assets/Test%20/Fact%20Check.docx?sv=2023-01-03&spr=https&st=2025-08-04T20%3A27%3A22Z&se=2028-08-05T20%3A27%3A00Z&sr=b&sp=r&sig=XB1%2FNzJ57eg52j4xcZPGMlFrp3HYErCW1t7k1fMyiIc%3D"
         ]
+        
         url_map = {url: hashlib.md5(url.encode()).hexdigest() for url in urls_to_preload}
         for doc_url, url_hash in url_map.items():
             index_path = os.path.join(PRECOMPUTED_DIR, f"{url_hash}.index")
@@ -55,12 +86,16 @@ async def lifespan(app: FastAPI):
                     with open(chunks_path, 'r') as f:
                         chunks_with_meta = json.load(f)
                     
+                    if not chunks_with_meta: continue
+                    
                     tokenized_corpus = [c['text'].lower().split(" ") for c in chunks_with_meta]
                     bm25 = BM25Okapi(tokenized_corpus)
                     
-                    # Use the HASH as the cache key
-                    CACHE[url_hash] = {"faiss_index": index, "bm25_index": bm25, "chunks_with_meta": chunks_with_meta}
-                    logging.info(f"Successfully pre-loaded a document into cache (Hash: {url_hash[:8]}...).")
+                    sample_text = " ".join([c['text'] for c in chunks_with_meta[:10]])[:1500]
+                    doc_topic = await get_document_topic(sample_text)
+
+                    CACHE[url_hash] = {"faiss_index": index, "bm25_index": bm25, "chunks_with_meta": chunks_with_meta, "topic": doc_topic}
+                    logging.info(f"Successfully pre-loaded a document into cache (Hash: {url_hash[:8]}..., Topic: {doc_topic}).")
                 except Exception as e:
                     logging.error(f"Failed to pre-load cache for {doc_url}: {e}")
     yield
@@ -81,9 +116,7 @@ class HackRxResponse(BaseModel):
     answers: List[Answer]
 
 async def get_or_create_document_index(doc_url: str) -> Dict[str, Any]:
-    # Create the hash from the incoming URL to use as the canonical key.
     url_hash = hashlib.md5(doc_url.encode()).hexdigest()
-
     if url_hash in CACHE:
         logging.info(f"Cache HIT for document hash: {url_hash[:8]}...")
         return CACHE[url_hash]
@@ -92,23 +125,40 @@ async def get_or_create_document_index(doc_url: str) -> Dict[str, Any]:
     document_chunks_with_meta = list(read_url_and_extract_chunks(doc_url))
     
     if not document_chunks_with_meta:
-        raise HTTPException(status_code=400, detail="No valid content extracted.")
+        raise HTTPException(status_code=400, detail="No processable content extracted. File may be unsupported, too large, or inaccessible.")
     
     document_texts = [c['text'] for c in document_chunks_with_meta]
-    logging.info(f"Extracted {len(document_texts)} chunks. Generating indices...")
+    logging.info(f"Extracted {len(document_texts)} chunks. Generating embeddings in batches...")
     
+    all_embeddings = []
     embed_model = "models/text-embedding-004"
-    result = await genai.embed_content_async(model=embed_model, content=document_texts, task_type="RETRIEVAL_DOCUMENT")
-    doc_embeddings = np.array(result['embedding'], dtype='float32')
+    for i in range(0, len(document_texts), EMBEDDING_BATCH_SIZE):
+        batch = document_texts[i:i + EMBEDDING_BATCH_SIZE]
+        try:
+            result = await genai.embed_content_async(model=embed_model, content=batch, task_type="RETRIEVAL_DOCUMENT")
+            all_embeddings.extend(result['embedding'])
+            logging.info(f"Embedded batch {i//EMBEDDING_BATCH_SIZE + 1}...")
+        except Exception as e:
+            logging.error(f"Embedding failed for a batch: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to embed document content. {e}")
     
+    doc_embeddings = np.array(all_embeddings, dtype='float32')
     faiss_index = faiss.IndexFlatL2(doc_embeddings.shape[1])
     faiss_index.add(doc_embeddings)
 
     tokenized_corpus = [doc.lower().split(" ") for doc in document_texts]
     bm25_index = BM25Okapi(tokenized_corpus)
+
+    sample_text = " ".join(document_texts[:10])[:1500]
+    doc_topic = await get_document_topic(sample_text)
+    logging.info(f"Document classified as: {doc_topic}")
     
-    # When storing the newly processed document, use the hash as the key.
-    CACHE[url_hash] = {"faiss_index": faiss_index, "bm25_index": bm25_index, "chunks_with_meta": document_chunks_with_meta}
+    CACHE[url_hash] = {
+        "faiss_index": faiss_index, 
+        "bm25_index": bm25_index, 
+        "chunks_with_meta": document_chunks_with_meta,
+        "topic": doc_topic
+    }
     logging.info(f"Document processed and cached successfully (Hash: {url_hash[:8]}...).")
     return CACHE[url_hash]
 
@@ -116,7 +166,10 @@ async def expand_query(question: str) -> List[str]:
     model = genai.GenerativeModel('gemini-1.5-flash')
     prompt = f'You are a query expansion expert for technical documents. Generate 3 rephrased versions of the question that maintain the exact original intent and entities. Only improve searchability through synonyms or minor sentence structure changes. Respond with only a JSON object like this: {{"queries": ["query1", "query2", "query3"]}}\n\nOriginal Question: "{question}"'
     try:
-        response = await model.generate_content_async(prompt, generation_config=JSON_GENERATION_CONFIG)
+        response = await asyncio.wait_for(
+            model.generate_content_async(prompt, generation_config=JSON_GENERATION_CONFIG), 
+            timeout=10.0
+        )
         result = json.loads(response.text)
         expanded = result.get("queries", [])
         return list(set([question] + expanded))
@@ -137,15 +190,13 @@ def reciprocal_rank_fusion(ranked_lists: List[List[int]], k: int = 60) -> List[i
 async def process_single_question(question: str, doc_data: Dict[str, Any], semaphore: asyncio.Semaphore) -> Answer:
     async with semaphore:
         logging.info(f"Processing question: '{question[:30]}...'")
-        faiss_index, bm25_index, chunks_with_meta = doc_data["faiss_index"], doc_data["bm25_index"], doc_data["chunks_with_meta"]
+        faiss_index, bm25_index, chunks_with_meta, topic = doc_data["faiss_index"], doc_data["bm25_index"], doc_data["chunks_with_meta"], doc_data.get("topic", "Default")
         chunks_text = [c['text'] for c in chunks_with_meta]
 
         all_queries = await expand_query(question)
         
         embed_model = "models/text-embedding-004"
-        embedding_result = await genai.embed_content_async(
-            model=embed_model, content=all_queries, task_type="RETRIEVAL_QUERY"
-        )
+        embedding_result = await genai.embed_content_async(model=embed_model, content=all_queries, task_type="RETRIEVAL_QUERY")
         all_query_embeddings = embedding_result['embedding']
 
         faiss_results, bm25_results = [], []
@@ -163,31 +214,39 @@ async def process_single_question(question: str, doc_data: Dict[str, Any], semap
         fused_indices = reciprocal_rank_fusion(faiss_results + bm25_results)
         unique_fused_indices = list(dict.fromkeys(fused_indices))
         
-        retrieved_chunks_for_rerank = [{"index": int(i), "text": chunks_with_meta[i]['text'], "source": chunks_with_meta[i]['source']} for i in unique_fused_indices[:20]]
+        retrieved_chunks_for_rerank = [{"index": int(i), "text": chunks_with_meta[i]['text'], "source": chunks_with_meta[i]['source']} for i in unique_fused_indices[:15]]
 
         if not retrieved_chunks_for_rerank:
             return Answer(question=question, answer="Could not find relevant information.", context=[])
 
         rerank_model = genai.GenerativeModel('gemini-1.5-flash')
-        rerank_prompt = f'You are a meticulous relevance expert for insurance documents. Your task is to identify the top 5 most relevant document chunks to answer the user\'s question. Prioritize chunks that contain specific numbers, limits, percentages, or explicit conditions. Use the "source" (e.g., page number) as a contextual clue.\nRespond with only a JSON object like this: {{"relevant_indices": [index1, index2, ...]}}\n\nUser Question: "{question}"\n\nDocument Chunks:\n{json.dumps(retrieved_chunks_for_rerank)}'
+        reranker_base_prompt = RERANKER_PROMPTS[topic]
+        rerank_prompt = f'{reranker_base_prompt}\nRespond with only a JSON object like this: {{"relevant_indices": [index1, index2, ...]}}\n\nUser Question: "{question}"\n\nDocument Chunks:\n{json.dumps(retrieved_chunks_for_rerank)}'
         
         final_context = []
         try:
-            rerank_response = await rerank_model.generate_content_async(rerank_prompt, generation_config=JSON_GENERATION_CONFIG)
+            rerank_response = await asyncio.wait_for(
+                rerank_model.generate_content_async(rerank_prompt, generation_config=JSON_GENERATION_CONFIG),
+                timeout=RERANKER_TIMEOUT
+            )
             rerank_result = json.loads(rerank_response.text)
             top_indices = rerank_result.get("relevant_indices", [])
             chunk_map = {chunk["index"]: chunk["text"] for chunk in retrieved_chunks_for_rerank}
             final_context = [chunk_map[i] for i in top_indices if i in chunk_map]
+        except asyncio.TimeoutError:
+            logging.warning("Reranking step timed out. Falling back to top 5.")
+            final_context = [chunk["text"] for chunk in retrieved_chunks_for_rerank[:5]]
         except Exception as e:
             logging.warning(f"Re-ranking failed: {e}. Falling back.")
-        
+            final_context = [chunk["text"] for chunk in retrieved_chunks_for_rerank[:5]]
+
         if not final_context:
              final_context = [chunk["text"] for chunk in retrieved_chunks_for_rerank[:5]]
 
         answer_model = genai.GenerativeModel('gemini-1.5-pro')
         answer_prompt = f'You are a highly precise AI assistant. Your task is to answer the user\'s question based *only* on the provided context. You MUST NOT use any external knowledge.\n\nContext:\n{"\n\n---\n\n".join(final_context)}\n\nQuestion: {question}\n\nInstructions:\n1. Analyze the context carefully. Your entire answer must be derived from it.\n2. Provide a direct, concise answer.\n3. If the context contains specific numbers, dates, or conditions, you must include them in your answer.\n4. If the answer cannot be found in the context, you MUST state: "The provided context does not contain the answer to this question."'
         
-        answer_response = await answer_model.generate_content_async(answer_prompt)
+        answer_response = await asyncio.wait_for(answer_model.generate_content_async(answer_prompt), timeout=FINAL_ANSWER_TIMEOUT)
         return Answer(question=question, answer=answer_response.text.strip(), context=final_context)
 
 @app.post("/hackrx/run")
@@ -195,7 +254,6 @@ async def run_query_retrieval(request: HackRxRequest, token: HTTPAuthorizationCr
     if not request.questions:
         raise HTTPException(status_code=400, detail="No questions provided")
     try:
-        # Use the string representation of the Pydantic HttpUrl
         doc_url_str = str(request.documents)
         doc_data = await get_or_create_document_index(doc_url_str)
         
