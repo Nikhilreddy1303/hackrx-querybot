@@ -164,7 +164,19 @@ async def get_or_create_document_index(doc_url: str) -> Dict[str, Any]:
 
 async def expand_query(question: str) -> List[str]:
     model = genai.GenerativeModel('gemini-1.5-flash')
-    prompt = f'You are a query expansion expert for technical documents. Generate 3 rephrased versions of the question that maintain the exact original intent and entities. Only improve searchability through synonyms or minor sentence structure changes. Respond with only a JSON object like this: {{"queries": ["query1", "query2", "query3"]}}\n\nOriginal Question: "{question}"'
+    
+    # New, improved prompt with a guiding example (few-shot prompting)
+    prompt = f'''You are a query expansion expert. Your task is to rewrite a question in three different ways to improve search recall against a text document. Focus on using synonyms and alternative phrasing for key terms.
+    
+    For example, if the question is "What is the waiting period for pre-existing conditions?", good expansions would be:
+    - "pre-existing disease waiting period"
+    - "how long must I wait for existing illness coverage"
+    - "coverage delay for prior health issues"
+
+    Respond with only a JSON object like this: {{"queries": ["query1", "query2", "query3"]}}
+
+    Original Question: "{question}"'''
+
     try:
         response = await asyncio.wait_for(
             model.generate_content_async(prompt, generation_config=JSON_GENERATION_CONFIG), 
