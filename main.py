@@ -303,7 +303,22 @@ async def run_query_retrieval(request: HackRxRequest, token: HTTPAuthorizationCr
             agent_model = genai.GenerativeModel('gemini-1.5-pro', tools=[GET_REQUEST_TOOL])
             tool_executors = {"make_http_get_request": make_http_get_request}
             chat = agent_model.start_chat()
-            agent_prompt = f"You are a helpful assistant. Please follow the instructions in the document to answer the user's question(s). \n\nDocument Content:\n{document_text}\n\nUser Question(s): {' '.join(request.questions)}"
+            agent_prompt = f"""You are a meticulous, instruction-following assistant. Your primary goal is to follow the user's request with perfect precision.
+
+            **Your Rules:**
+            1.  Read the user's question very carefully. The user's instructions are your highest priority.
+            2.  Do not make assumptions about the final goal. Only perform the steps explicitly asked for by the user.
+            3.  **Crucially, if the user includes a negative constraint (e.g., "DO NOT call this API" or "don't do X"), this is the most important instruction and you MUST obey it.**
+            4.  Execute tasks one step at a time.
+
+            **Provided Document:**
+            ---
+            {document_text}
+            ---
+
+            **User's Request:**
+            "{' '.join(request.questions)}"
+            """
             response = await asyncio.wait_for(chat.send_message_async(agent_prompt), timeout=60.0)
             max_turns = 5
             for turn in range(max_turns):
