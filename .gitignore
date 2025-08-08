@@ -1,11 +1,10 @@
-# Environment files
-.env
-teat_api.py
-
-# Python virtual environment
+# Virtual Environments
 env/
-venv/
+env_new/
 
 # Python cache
 __pycache__/
 *.pyc
+
+# Secrets
+.env

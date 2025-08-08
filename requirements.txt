@@ -1,6 +1,7 @@
 # FastAPI server
 fastapi
 uvicorn
+gunicorn
 python-dotenv
 
 # LLM APIs

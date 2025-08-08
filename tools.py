@@ -1,5 +1,3 @@
-# tools.py
-
 import requests
 import logging
 
