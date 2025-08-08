@@ -11,6 +11,7 @@ from read_eml import read_eml_and_chunk
 from read_excel import read_excel_and_chunk
 from read_ppt import read_ppt_and_chunk
 from read_image import read_image_and_chunk
+from read_html import read_html_and_chunk
 
 # Read the limit from an environment variable, defaulting to 25 MB.
 MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "100"))
@@ -25,6 +26,7 @@ SUPPORTED_CONTENT_TYPES = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
+    ".html": "text/html"
 }
 
 def download_file_from_url(url):
@@ -83,6 +85,8 @@ def read_url_and_extract_chunks(url):
             yield from read_excel_and_chunk(temp_path)
         elif ext == ".pptx":
             yield from read_ppt_and_chunk(temp_path)
+        elif ext == ".html":
+            yield from read_html_and_chunk(temp_path)
 
     except (ValueError, ConnectionError) as e:
         logging.warning(f"Skipping document processing for {url}: {e}")
