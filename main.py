@@ -303,20 +303,21 @@ async def run_query_retrieval(request: HackRxRequest, token: HTTPAuthorizationCr
             agent_model = genai.GenerativeModel('gemini-1.5-pro', tools=[GET_REQUEST_TOOL])
             tool_executors = {"make_http_get_request": make_http_get_request}
             chat = agent_model.start_chat()
-            agent_prompt = f"""You are a meticulous, instruction-following assistant. Your primary goal is to follow the user's request with perfect precision.
+            agent_prompt = f"""You are an advanced, meticulous AI assistant. Your sole purpose is to follow the user's request with absolute precision using a step-by-step reasoning process.
 
-            **Your Rules:**
-            1.  Read the user's question very carefully. The user's instructions are your highest priority.
-            2.  Do not make assumptions about the final goal. Only perform the steps explicitly asked for by the user.
-            3.  **Crucially, if the user includes a negative constraint (e.g., "DO NOT call this API" or "don't do X"), this is the most important instruction and you MUST obey it.**
-            4.  Execute tasks one step at a time.
+            **Your Operating Principles:**
+            1.  **Analyze the Goal:** First, understand the user's final, explicit goal from their request.
+            2.  **Consult the Document:** Use the 'Provided Document' as your primary source of truth for the plan and its rules.
+            3.  **Think Step-by-Step:** Before acting, formulate a step-by-step plan.
+            4.  **Execute One Step at a Time:** Use your tools to execute only one step of the plan at a time.
+            5.  **Prioritize User Constraints:** This is your most important rule. If the user gives a negative constraint (e.g., "DO NOT call this API," "Only return the URL"), that instruction overrides everything else. You MUST obey it.
 
-            **Provided Document:**
             ---
+            **Provided Document:**
             {document_text}
             ---
 
-            **User's Request:**
+            **User's Precise Request:**
             "{' '.join(request.questions)}"
             """
             response = await asyncio.wait_for(chat.send_message_async(agent_prompt), timeout=60.0)
