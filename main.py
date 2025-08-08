@@ -297,33 +297,36 @@ async def run_query_retrieval(request: HackRxRequest, token: HTTPAuthorizationCr
 
         answers = []
         if "AGENT" in intent:
-            # AGENTIC LOGIC
-            # ... (The full agentic loop code as provided before)
+            # --- FINAL AGENTIC LOGIC WITH "THINKING" LOOP ---
             logging.info("Executing task via AGENT engine...")
+            
             agent_model = genai.GenerativeModel('gemini-1.5-pro', tools=[GET_REQUEST_TOOL])
             tool_executors = {"make_http_get_request": make_http_get_request}
+
             chat = agent_model.start_chat()
             agent_prompt = f"""You are an advanced, meticulous AI assistant. Your sole purpose is to follow the user's request with absolute precision using a step-by-step reasoning process.
-
             **Your Operating Principles:**
-            1.  **Analyze the Goal:** First, understand the user's final, explicit goal from their request.
-            2.  **Consult the Document:** Use the 'Provided Document' as your primary source of truth for the plan and its rules.
-            3.  **Think Step-by-Step:** Before acting, formulate a step-by-step plan.
-            4.  **Execute One Step at a Time:** Use your tools to execute only one step of the plan at a time.
-            5.  **Prioritize User Constraints:** This is your most important rule. If the user gives a negative constraint (e.g., "DO NOT call this API," "Only return the URL"), that instruction overrides everything else. You MUST obey it.
-
+            1. Analyze the Goal: First, understand the user's final, explicit goal from their request.
+            2. Consult the Document: Use the 'Provided Document' as your primary source of truth for the plan and its rules.
+            3. Think Step-by-Step: Before acting, formulate a step-by-step plan. Your intermediate thoughts should be logged.
+            4. Execute One Step at a Time: Use your tools to execute only one step of the plan at a time.
+            5. Prioritize User Constraints: This is your most important rule. If the user gives a negative constraint (e.g., "DO NOT call this API"), that instruction MUST be obeyed.
+            6. Final Answer Format: When you have the complete and final answer that fulfills the user's request, you MUST prefix it with the label "Final Answer:".
             ---
             **Provided Document:**
             {document_text}
             ---
-
             **User's Precise Request:**
             "{' '.join(request.questions)}"
             """
+
             response = await asyncio.wait_for(chat.send_message_async(agent_prompt), timeout=60.0)
-            max_turns = 5
+            
+            final_answer = ""
+            max_turns = 7 # Increased turns for multi-step reasoning
             for turn in range(max_turns):
                 part = response.candidates[0].content.parts[0]
+                
                 if part.function_call:
                     function_call = part.function_call
                     function_name = function_call.name
@@ -333,20 +336,33 @@ async def run_query_retrieval(request: HackRxRequest, token: HTTPAuthorizationCr
                         logging.info(f"Agent requesting to call tool '{function_name}' with args: {args}")
                         tool_response = await asyncio.to_thread(function_to_call, **args)
                         response = await asyncio.wait_for(
-                            chat.send_message_async([Part(function_response={"name": function_name, "response": {"content": tool_response}})]),
-                            timeout=60.0
+                            chat.send_message_async(
+                                [Part(function_response={"name": function_name, "response": {"content": tool_response}})]
+                            ), timeout=60.0
                         )
                     else:
                         final_answer = f"Error: Agent tried to call unknown function '{function_name}'."
                         break
+                
                 elif part.text:
-                    final_answer = part.text
-                    break
+                    # --- THIS IS THE NEW LOGIC ---
+                    if "Final Answer:" in part.text:
+                        # Agent has given the final answer. Extract it and stop.
+                        final_answer = part.text.split("Final Answer:", 1)[-1].strip()
+                        logging.info(f"Agent provided final answer.")
+                        break
+                    else:
+                        # This is an intermediate thought. Log it and continue the loop.
+                        logging.info(f"Agent Thought: {part.text}")
+                        # Send the thought back to the model to continue the chain
+                        response = await asyncio.wait_for(chat.send_message_async(part.text), timeout=60.0)
+                
                 else:
                     final_answer = "Error: Agent returned an unexpected response type."
                     break
             else:
                 final_answer = "Error: Agent exceeded maximum turns without providing a final answer."
+
             for q in request.questions:
                 answers.append(Answer(question=q, answer=final_answer.strip(), context=[document_text]))
 
