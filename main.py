@@ -192,6 +192,10 @@ def reciprocal_rank_fusion(ranked_lists: List[List[int]], k: int = 60) -> List[i
 # --- UPGRADED RAG PIPELINE (WITH HYDE) ---
 async def process_single_question(question: str, doc_data: Dict[str, Any], semaphore: asyncio.Semaphore) -> Answer:
     async with semaphore:
+        # This function's retrieval logic (HyDE, FAISS, BM25, Re-ranker) is already optimized.
+        # The only change is to the final answer_prompt.
+        # ... (all the code from the start of the function down to creating final_context)
+        
         logging.info(f"Processing question via RAG: '{question[:30]}...'")
         faiss_index, bm25_index, chunks_with_meta = doc_data["faiss_index"], doc_data["bm25_index"], doc_data["chunks_with_meta"]
         chunks_text = [c['text'] for c in chunks_with_meta]
@@ -248,21 +252,22 @@ async def process_single_question(question: str, doc_data: Dict[str, Any], semap
         
         answer_model = genai.GenerativeModel('gemini-1.5-pro')
         
-        # --- FINAL "FACT-CHECKING" PROMPT ---
-        answer_prompt = f"""You are a highly meticulous and factual AI assistant. Your task is to answer the user's question with perfect accuracy, based ONLY on the provided context.
+        # --- FINAL "SELF-CRITIQUE" PROMPT FOR MAXIMUM ACCURACY ---
+        answer_prompt = f"""You are a meticulous, factual expert. Your goal is to provide a comprehensive and accurate answer based ONLY on the provided context.
 
-        Follow these steps:
-        1.  **Analyze the Question:** Understand exactly what information the user is asking for.
-        2.  **Extract Evidence:** Read through the provided context and identify all the specific sentences or phrases that directly relate to the user's question.
-        3.  **Synthesize Answer:** Formulate a concise, direct answer to the user's question using ONLY the evidence you extracted in the previous step.
-        4.  **Final Check:** If you cannot find any evidence in the context to answer the question, and only in that case, you MUST respond with: "The provided context does not contain the answer to this question."
+        **Follow this exact process:**
+        1.  **Analyze the User's Question:** Identify all the individual pieces of information the user is asking for.
+        2.  **Extract Evidence:** Go through the 'Context' and extract every single sentence or phrase that is relevant to any part of the user's question. List these findings internally.
+        3.  **Synthesize Draft Answer:** Based ONLY on your extracted evidence, write a draft answer that addresses all parts of the user's question.
+        4.  **Self-Critique:** Review your draft answer. Does it fully answer the user's entire question? Is every statement in your answer directly supported by the evidence you extracted? If not, refine your answer.
+        5.  **Final Output:** Provide only the final, refined, and comprehensive answer. If the context does not contain the information, state that clearly.
 
         **Context:**
         ---
         {formatted_context}
         ---
 
-        **Question:** {question}
+        **User's Question:** {question}
         """
         # --- END FINAL PROMPT ---
         
