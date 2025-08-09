@@ -1,5 +1,3 @@
-# main.py
-
 import os
 import faiss
 import numpy as np
@@ -38,13 +36,21 @@ EMBEDDING_BATCH_SIZE = 100
 RERANKER_TIMEOUT = 15.0
 FINAL_ANSWER_TIMEOUT = 30.0
 
-# --- SETUP DEDICATED Q&A LOGGER ---
 qa_logger = logging.getLogger('qa_logger')
 qa_logger.setLevel(logging.INFO)
-handler = logging.handlers.RotatingFileHandler('qa_log.jsonl', maxBytes=10*1024*1024, backupCount=3)
-formatter = logging.Formatter('%(message)s')
-handler.setFormatter(formatter)
-qa_logger.addHandler(handler)
+qa_logger.propagate = False
+file_handler = logging.handlers.RotatingFileHandler('qa_log.jsonl', maxBytes=10*1024*1024, backupCount=3)
+file_formatter = logging.Formatter('%(message)s')
+file_handler.setFormatter(file_formatter)
+stream_handler = logging.StreamHandler()
+stream_formatter = logging.Formatter('QA_LOG :: %(message)s')
+stream_handler.setFormatter(stream_formatter)
+
+# Clear existing handlers and add the new ones
+if qa_logger.hasHandlers():
+    qa_logger.handlers.clear()
+qa_logger.addHandler(file_handler)
+qa_logger.addHandler(stream_handler)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -379,6 +385,20 @@ async def run_query_retrieval(request: HackRxRequest, token: HTTPAuthorizationCr
                 else:
                     answers.append(res)
         
+        
+        try:
+            for ans in answers:
+                log_entry = {
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "document_url": doc_url_str,
+                    "question": ans.question,
+                    "answer": ans.answer,
+                    "context": ans.context
+                }
+                qa_logger.info(json.dumps(log_entry))
+        except Exception as e:
+            logging.error(f"Failed to write to QA log: {e}")
+
         if SUBMISSION_MODE:
             return {"answers": [item.answer for item in answers]}
         else:
