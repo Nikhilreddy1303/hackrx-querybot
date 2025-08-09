@@ -215,7 +215,6 @@ async def process_single_question(question: str, doc_data: Dict[str, Any], semap
         embed_model = "models/text-embedding-004"
         embedding_result = await genai.embed_content_async(model=embed_model, content=search_query_text, task_type="RETRIEVAL_QUERY")
         query_embedding_np = np.array(embedding_result['embedding'], dtype='float32').reshape(1, -1)
-
         k_faiss = min(20, len(chunks_text))
         _, faiss_indices = faiss_index.search(query_embedding_np, k_faiss)
         
@@ -241,18 +240,31 @@ async def process_single_question(question: str, doc_data: Dict[str, Any], semap
             final_context = [chunk_map[i] for i in top_indices if i in chunk_map]
         except Exception:
             final_context = [chunk["text"] for chunk in retrieved_chunks_for_rerank[:5]]
-
         if not final_context:
             final_context = [chunk["text"] for chunk in retrieved_chunks_for_rerank[:5]]
         
-        # --- THIS IS THE FIX ---
-        # We create the string with backslashes *before* the f-string.
         context_joiner = "\n\n---\n\n"
         formatted_context = context_joiner.join(final_context)
-        # --- END FIX ---
         
         answer_model = genai.GenerativeModel('gemini-1.5-pro')
-        answer_prompt = f'You are a precise AI assistant. Answer the user\'s question based *only* on the provided context. Do not use external knowledge.\n\nContext:\n{formatted_context}\n\nQuestion: {question}\n\nInstructions:\n1. Provide a direct, concise answer.\n2. If the answer cannot be found, state: "The provided context does not contain the answer to this question."'
+        
+        # --- FINAL "FACT-CHECKING" PROMPT ---
+        answer_prompt = f"""You are a highly meticulous and factual AI assistant. Your task is to answer the user's question with perfect accuracy, based ONLY on the provided context.
+
+        Follow these steps:
+        1.  **Analyze the Question:** Understand exactly what information the user is asking for.
+        2.  **Extract Evidence:** Read through the provided context and identify all the specific sentences or phrases that directly relate to the user's question.
+        3.  **Synthesize Answer:** Formulate a concise, direct answer to the user's question using ONLY the evidence you extracted in the previous step.
+        4.  **Final Check:** If you cannot find any evidence in the context to answer the question, and only in that case, you MUST respond with: "The provided context does not contain the answer to this question."
+
+        **Context:**
+        ---
+        {formatted_context}
+        ---
+
+        **Question:** {question}
+        """
+        # --- END FINAL PROMPT ---
         
         answer_response = await asyncio.wait_for(answer_model.generate_content_async(answer_prompt), timeout=FINAL_ANSWER_TIMEOUT)
         return Answer(question=question, answer=answer_response.text.strip(), context=final_context)
